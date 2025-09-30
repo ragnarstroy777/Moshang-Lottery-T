@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Розыгрыш призов</title>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0"
+    />
+    <!-- <link rel="stylesheet" href="./index.css"> -->
+  </head>
+
+  <body>
+    <script src="./lib/three.min.js"></script>
+    <script src="./lib/tween.min.js"></script>
+    <script src="./lib/TrackballControls.js"></script>
+    <script src="./lib/CSS3DRenderer.js"></script>
+    <script src="./lib/ajax.js"></script>
+    <!-- MediaPipe Hands for gesture detection (open hand to stop) -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+
+    <div class="canvas-box">
+      <canvas id="canvas">Ваш браузер не поддерживает canvas</canvas>
+    </div>
+
+    <div class="music">
+      <audio id="music" src="./data/music.mp3" class="music-item" loop></audio>
+      <div id="musicBox" class="music-box" title="Воспроизвести/Пауза фоновой музыки">Музыка</div>
+    </div>
+
+    <div class="brand-logo">
+      <div class="brand-logo__inner">
+        <img src="./img/timobile-logo.svg" alt="Логотип T-Mobile" />
+      </div>
+    </div>
+
+    <div id="prizeBar"></div>
+
+    <div id="container"></div>
+
+    <div id="qrPrompt" class="qr-prompt">
+      <img
+        src="./img/qrcode.svg"
+        alt="QR-код"
+        class="qr-placeholder"
+        width="188"
+        height="188"
+      />
+      <div class="qr-label">
+        <span>Сканируй</span>
+        <span>И</span>
+        <span>Забирай!</span>
+      </div>
+    </div>
+
+    <div id="menu">
+      <button id="enter">Перейти к розыгрышу</button>
+      <div id="lotteryBar" class="none">
+        <button id="lottery">Начать розыгрыш</button>
+        <button id="reLottery">Переразыграть</button>
+        <div class="fixed-bar">
+          <button id="save" class="fixed-btn">Экспортировать результаты</button>
+          <button id="reset" class="fixed-btn">Сброс</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="qipao-container"></div>
+  </body>
+</html>

@@ -9,10 +9,29 @@ import {
   resetPrize
 } from "./prizeList";
 import { NUMBER_MATRIX } from "./config.js";
+import { initGestureStopper, allowImmediateSpin } from "./gesture.js";
 
 const ROTATE_TIME = 3000;
 const ROTATE_LOOP = 1000;
+const MIN_SPIN_MS = 1000; // минимум 1s до допуска жеста стоп
+const SPIN_SPEED = 0.162; // чуть выше базового темпа для более живой сцены
 const BASE_HEIGHT = 1080;
+const BASE_WIDTH = 1920;
+const MIN_RESOLUTION = 0.65;
+const MAX_RESOLUTION = 1.25;
+const RESOLUTION_EPSILON = 0.03;
+const DISPLAY_YEAR = 2026;
+const MIN_AUTO_SPINS = 3;
+const MAX_RENDER_FPS = 55;
+const CARD_LABEL_OVERRIDES = {
+  1: "Красивый номер",
+  2: "Дополнительные гигабайты",
+  3: "Дополнительные минуты",
+  4: "Мегабайты в роуминге",
+  5: "Уникальный аватар с фирменным стилем T-Mobile",
+  6: "Эксклюзивный номер, который совпадает с датой твоего дня рождения",
+  7: "Фирменный T-Mobile облик для аватара в метавселенной"
+};
 
 let TOTAL_CARDS,
   btns = {
@@ -20,14 +39,36 @@ let TOTAL_CARDS,
     lotteryBar: document.querySelector("#lotteryBar"),
     lottery: document.querySelector("#lottery")
   },
+  qrPrompt = document.querySelector("#qrPrompt"),
   prizes,
-  EACH_COUNT,
   ROW_COUNT = 7,
   COLUMN_COUNT = 17,
-  COMPANY,
   HIGHLIGHT_CELL = [],
-  // 当前的比例
-  Resolution = 1;
+  // Текущий коэффициент масштабирования
+  Resolution = 1,
+  prizeIndexMap = new Map(),
+  availablePrizePool = [],
+  cardPrizeLayout = [],
+  defaultPrizeType = null,
+  gesturesReady = false;
+
+const LAYOUT_CLASSES = {
+  compact: "layout-compact",
+  portrait: "layout-portrait"
+};
+
+const MODE_CLASSES = {
+  table: "mode-table",
+  lottery: "mode-lottery"
+};
+
+const PRIZE_DISPLAY_CLASSES = {
+  compact: "prize-compact",
+  expanded: "prize-expanded"
+};
+
+const SPHERE_OFFSET_X = -240;
+const SPHERE_OFFSET_Y = 60;
 
 let camera,
   scene,
@@ -39,64 +80,548 @@ let camera,
     sphere: []
   };
 
-let rotateObj;
+let requestSmoothStop;
+let rotateScene = false;
+let spinStartedAt = 0;
+let spinBaseAngle = 0;
 
 let selectedCardIndex = [],
   rotate = false,
   basicData = {
-    prizes: [], //奖品信息
-    users: [], //所有人员
-    luckyUsers: {}, //已中奖人员
-    leftUsers: [] //未中奖人员
+    prizes: [], // Информация о призах
+    users: [], // Все участники
+    luckyUsers: {}, // Победители
+    leftUsers: [], // Не выигравшие (сохраняем для совместимости)
+    awardedCounts: {}
   },
   interval,
-  // 当前抽的奖项，从最低奖开始抽，直到抽到大奖
-  currentPrizeIndex,
   currentPrize,
-  // 正在抽奖
+  // Идёт розыгрыш
   isLotting = false,
   currentLuckys = [];
 
+let shineTimer = null;
+let lastRenderAt = 0;
+
 initAll();
 
+function clamp(value, min, max) {
+  return Math.min(Math.max(value, min), max);
+}
+
+function toggleLayoutClass(element, className, enabled) {
+  if (!element) {
+    return;
+  }
+  if (enabled) {
+    element.classList.add(className);
+  } else {
+    element.classList.remove(className);
+  }
+}
+
+function setModeClass(mode) {
+  const body = document.body;
+  if (!body) {
+    return;
+  }
+  Object.values(MODE_CLASSES).forEach(cls => body.classList.remove(cls));
+  if (mode && MODE_CLASSES[mode]) {
+    body.classList.add(MODE_CLASSES[mode]);
+  }
+}
+
+function setPrizeDisplayMode(mode) {
+  const body = document.body;
+  if (!body) {
+    return;
+  }
+  Object.values(PRIZE_DISPLAY_CLASSES).forEach(cls =>
+    body.classList.remove(cls)
+  );
+  if (mode && PRIZE_DISPLAY_CLASSES[mode]) {
+    body.classList.add(PRIZE_DISPLAY_CLASSES[mode]);
+  }
+}
+
+function setLogoVisible(visible) {
+  const body = document.body;
+  if (!body) {
+    return;
+  }
+  if (visible) {
+    body.classList.add("logo-visible");
+  } else {
+    body.classList.remove("logo-visible");
+  }
+}
+
+function computeResolutionScale() {
+  const widthRatio = window.innerWidth / BASE_WIDTH;
+  const heightRatio = window.innerHeight / BASE_HEIGHT;
+  const nextScale = clamp(Math.min(widthRatio, heightRatio), MIN_RESOLUTION, MAX_RESOLUTION);
+  return nextScale;
+}
+
+function updateSphereTargets() {
+  if (!targets.sphere.length || typeof THREE === "undefined") {
+    return;
+  }
+  const total = targets.sphere.length;
+  const vector = new THREE.Vector3();
+  const offset = new THREE.Vector3(
+    SPHERE_OFFSET_X * Resolution,
+    SPHERE_OFFSET_Y * Resolution,
+    0
+  );
+  for (let i = 0; i < total; i++) {
+    const phi = Math.acos(-1 + (2 * i) / total);
+    const theta = Math.sqrt(total * Math.PI) * phi;
+    const target = targets.sphere[i];
+    if (!target) {
+      continue;
+    }
+    target.position.setFromSphericalCoords(800 * Resolution, phi, theta);
+    target.position.add(offset);
+    vector.copy(target.position).multiplyScalar(2).sub(offset);
+    target.lookAt(vector);
+  }
+}
+
+function computeWinnerPositions() {
+  const width = 140;
+  const locates = [];
+  let tag = -(currentLuckys.length - 1) / 2;
+
+  if (currentLuckys.length > 5) {
+    const yPosition = [-87, 87];
+    const total = selectedCardIndex.length;
+    const mid = Math.ceil(total / 2);
+    let localTag = -(mid - 1) / 2;
+    for (let i = 0; i < mid; i++) {
+      locates.push({
+        x: localTag * width * Resolution,
+        y: yPosition[0] * Resolution
+      });
+      localTag++;
+    }
+
+    localTag = -(total - mid - 1) / 2;
+    for (let i = mid; i < total; i++) {
+      locates.push({
+        x: localTag * width * Resolution,
+        y: yPosition[1] * Resolution
+      });
+      localTag++;
+    }
+  } else {
+    for (let i = selectedCardIndex.length; i > 0; i--) {
+      locates.push({
+        x: tag * width * Resolution,
+        y: 0 * Resolution
+      });
+      tag++;
+    }
+  }
+
+  return locates;
+}
+
+function repositionWinnerCards() {
+  if (!renderer || !threeDCards.length) {
+    return;
+  }
+
+  if (!currentLuckys.length || !selectedCardIndex.length) {
+    return;
+  }
+  const locates = computeWinnerPositions();
+  selectedCardIndex.forEach((cardIndex, index) => {
+    const object = threeDCards[cardIndex];
+    const targetPosition = locates[index];
+    if (!object || !targetPosition) {
+      return;
+    }
+    object.position.x = targetPosition.x;
+    object.position.y = targetPosition.y * Resolution;
+    object.position.z = 2200;
+  });
+  render();
+}
+
+function updateLayoutState() {
+  const body = document.body;
+  if (!body) {
+    return;
+  }
+
+  const aspectRatio = window.innerWidth / window.innerHeight;
+  const isPortrait = aspectRatio < 0.85 || window.innerWidth < 900;
+  const isCompact = !isPortrait && window.innerWidth < 1400;
+
+  toggleLayoutClass(body, LAYOUT_CLASSES.portrait, isPortrait);
+  toggleLayoutClass(body, LAYOUT_CLASSES.compact, isCompact);
+}
+
+function updateResolution(force = false) {
+  const newResolution = computeResolutionScale();
+  if (!force && Math.abs(newResolution - Resolution) < RESOLUTION_EPSILON) {
+    return;
+  }
+
+  Resolution = newResolution;
+  updateSphereTargets();
+  repositionWinnerCards();
+}
+
+function updateResponsiveLayout(force = false) {
+  updateLayoutState();
+  updateResolution(force);
+}
+function shuffleArray(arr) {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+}
+
+function assignBaseOpacity(element, force = false) {
+  if (!element) return;
+  if (!element.classList.contains("card-solid")) {
+    element.style.opacity = 0.98;
+  }
+}
+
+function setCardSolidState(element, isSolid) {
+  if (!element) return;
+  if (isSolid) {
+    element.classList.add("card-solid");
+    element.style.opacity = 1;
+  } else {
+    element.classList.remove("card-solid");
+    assignBaseOpacity(element);
+  }
+}
+
+function setQrVisibility(visible = false) {
+  if (!qrPrompt) return;
+  if (visible) {
+    qrPrompt.classList.add("visible");
+  } else {
+    qrPrompt.classList.remove("visible");
+  }
+}
+
+function ensureNameElement(element) {
+  if (!element) {
+    return null;
+  }
+  let nameEl = element.querySelector(".name");
+  if (!nameEl) {
+    nameEl = document.createElement("div");
+    nameEl.className = "name";
+    element.appendChild(nameEl);
+  }
+  try {
+    nameEl.setAttribute("lang", "ru");
+  } catch (e) {}
+  return nameEl;
+}
+
+function applyNameSizing(nameEl, text) {
+  if (!nameEl) {
+    return;
+  }
+  nameEl.classList.remove("name--sm", "name--xs", "name--xxs");
+  const length = text ? text.length : 0;
+  let clamp = 4;
+
+  if (length > 52) {
+    nameEl.classList.add("name--xxs");
+    clamp = 7;
+  } else if (length > 42) {
+    nameEl.classList.add("name--xs");
+    clamp = 6;
+  } else if (length > 30) {
+    nameEl.classList.add("name--sm");
+    clamp = 5;
+  }
+
+  nameEl.dataset.lineClamp = String(clamp);
+}
+
+function setCardLabel(element, label) {
+  const nameEl = ensureNameElement(element);
+  if (!nameEl) {
+    return;
+  }
+  const safeLabel = label || "";
+  nameEl.textContent = safeLabel;
+  element.title = safeLabel;
+  applyNameSizing(nameEl, safeLabel);
+  if (safeLabel) {
+    element.classList.remove("card-empty");
+  } else {
+    element.classList.add("card-empty");
+  }
+}
+
+function getPrizeLabel(prize) {
+  if (!prize) {
+    return "";
+  }
+  if (prize.title && prize.title.trim()) {
+    return prize.title.trim();
+  }
+  const sanitized = String(prize.text || "")
+    .replace(/\s+/g, " ")
+    .trim();
+  const noNumbers = sanitized.replace(/\d[\d\s]*/g, "").replace(/\s+/g, " ").trim();
+  return noNumbers || sanitized;
+}
+
+function normalizeLuckyData(raw) {
+  const normalized = {};
+  if (!raw || typeof raw !== "object") {
+    return normalized;
+  }
+  Object.keys(raw).forEach(key => {
+    const entries = Array.isArray(raw[key]) ? raw[key] : [];
+    normalized[key] = entries.map(entry => {
+      if (entry && typeof entry === "object" && !Array.isArray(entry)) {
+        return entry;
+      }
+      if (Array.isArray(entry)) {
+        return {
+          type: Number(key),
+          label: entry[1] || entry[0] || "",
+          source: entry
+        };
+      }
+      return {
+        type: Number(key),
+        label: String(entry || "")
+      };
+    });
+  });
+  return normalized;
+}
+
+function initialisePrizeState(luckyData) {
+  prizeIndexMap = new Map();
+  availablePrizePool = [];
+  basicData.awardedCounts = {};
+  basicData.luckyUsers = normalizeLuckyData(luckyData);
+
+  prizes.forEach((prize, index) => {
+    const labelOverride = CARD_LABEL_OVERRIDES.hasOwnProperty(prize.type)
+      ? CARD_LABEL_OVERRIDES[prize.type]
+      : null;
+    const label = labelOverride || getPrizeLabel(prize);
+    prize.displayLabel = label;
+    if (index === 0) {
+      defaultPrizeType = prize.type;
+    }
+    prizeIndexMap.set(prize.type, { prize, index });
+    if (prize.type === defaultPrizeType) {
+      return;
+    }
+    const typeKey = String(prize.type);
+    const awarded = (basicData.luckyUsers[typeKey] || []).length;
+    basicData.awardedCounts[prize.type] = awarded;
+    const remaining = Math.max((Number(prize.count) || 0) - awarded, 0);
+    for (let i = 0; i < remaining; i++) {
+      availablePrizePool.push(prize.type);
+    }
+  });
+
+  shuffleArray(availablePrizePool);
+}
+
+function buildCardEntries() {
+  const entries = [];
+  const displayTypes = [];
+  prizeIndexMap.forEach((info, type) => {
+    if (info && info.prize.type !== defaultPrizeType) {
+      displayTypes.push(type);
+    }
+  });
+
+  if (displayTypes.length === 0) {
+    for (let i = 0; i < TOTAL_CARDS; i++) {
+      entries.push({ type: null, label: "" });
+    }
+    return entries;
+  }
+
+  let bag = [];
+  for (let i = 0; i < TOTAL_CARDS; i++) {
+    if (bag.length === 0) {
+      bag = displayTypes.slice();
+      shuffleArray(bag);
+    }
+    const type = bag.pop();
+    const info = prizeIndexMap.get(type);
+    entries.push({
+      type,
+      label: (info && info.prize && info.prize.displayLabel) || ""
+    });
+  }
+
+  return entries;
+}
+
+function drawPrizeFromPool() {
+  if (availablePrizePool.length === 0) {
+    return null;
+  }
+  const index = Math.floor(Math.random() * availablePrizePool.length);
+  const [type] = availablePrizePool.splice(index, 1);
+  const info = prizeIndexMap.get(type);
+  if (!info) {
+    return null;
+  }
+
+  return {
+    type,
+    label: info.prize.displayLabel,
+    text: info.prize.text,
+    index: info.index,
+    timestamp: Date.now()
+  };
+}
+
+function markPrizeAwarded(record, options = {}) {
+  if (!record || typeof record.type === "undefined") {
+    return;
+  }
+  const type = record.type;
+  basicData.awardedCounts[type] = (basicData.awardedCounts[type] || 0) + 1;
+  const info = prizeIndexMap.get(type);
+  if (info) {
+    setPrizeData(info.index, basicData.awardedCounts[type], {
+      highlight: !!options.highlight
+    });
+  }
+}
+
+function undoPrizeAward(record) {
+  if (!record || typeof record.type === "undefined") {
+    return;
+  }
+  const type = record.type;
+  const current = basicData.awardedCounts[type] || 0;
+  basicData.awardedCounts[type] = current > 0 ? current - 1 : 0;
+  availablePrizePool.push(type);
+  shuffleArray(availablePrizePool);
+  const info = prizeIndexMap.get(type);
+  if (info) {
+    setPrizeData(info.index, basicData.awardedCounts[type], {
+      clearHighlight: true
+    });
+  }
+}
+
+function updateAllPrizeDisplays(highlightType) {
+  prizes.forEach((prize, index) => {
+    if (prize.type === defaultPrizeType) {
+      return;
+    }
+    const awarded = basicData.awardedCounts[prize.type] || 0;
+    setPrizeData(index, awarded, {
+      highlight: prize.type === highlightType
+    });
+  });
+}
+
+function refreshCardLayout() {
+  cardPrizeLayout = buildCardEntries();
+  for (let i = 0; i < threeDCards.length; i++) {
+    changeCard(i, cardPrizeLayout[i] || {});
+  }
+}
+
+function ensureGestureControl() {
+  if (gesturesReady) {
+    return;
+  }
+  gesturesReady = true;
+  initGestureStopper({
+    onStop: () => {
+      if (isLotting && Date.now() - spinStartedAt > MIN_SPIN_MS) {
+        requestSmoothStop && requestSmoothStop();
+        btns.lottery.innerHTML = "Начать розыгрыш";
+      }
+    },
+    onSpin: () => {
+      startLotteryFlow("gesture");
+    }
+  });
+}
+
+function startLotteryFlow(source = "button") {
+  if (isLotting) {
+    if (source === "gesture") {
+      addQipao("Розыгрыш уже идёт, жест запуска пропущен.");
+    }
+    return;
+  }
+
+  const message =
+    source === "gesture"
+      ? "Жест распознан! Запускаем розыгрыш, удачи!"
+      : "Запускаем случайный розыгрыш, удачи!";
+
+  setQrVisibility(false);
+
+  Promise.resolve(saveData()).then(() => {
+    if (availablePrizePool.length === 0) {
+      addQipao("Все призы уже разыграны!");
+      setLotteryStatus(false);
+      btns.lottery.innerHTML = "Начать розыгрыш";
+      return;
+    }
+
+    if (btns.lotteryBar.classList.contains("none")) {
+      removeHighlight();
+      rotate = true;
+      switchScreen("lottery");
+    }
+
+    setLotteryStatus(true);
+    resetCard().then(() => {
+      rotateScene = true;
+      spinStartedAt = Date.now();
+      lottery();
+    });
+    addQipao(message);
+  });
+}
+
 /**
- * 初始化所有DOM
+ * Инициализация DOM
  */
 function initAll() {
+  updateResponsiveLayout(true);
   window.AJAX({
     url: "/getTempData",
     success(data) {
-      // 获取基础数据
+      // Получение базовых данных
       prizes = data.cfgData.prizes;
-      EACH_COUNT = data.cfgData.EACH_COUNT;
-      COMPANY = data.cfgData.COMPANY;
       HIGHLIGHT_CELL = createHighlight();
       basicData.prizes = prizes;
       setPrizes(prizes);
 
       TOTAL_CARDS = ROW_COUNT * COLUMN_COUNT;
 
-      // 读取当前已设置的抽奖结果
-      basicData.leftUsers = data.leftUsers;
-      basicData.luckyUsers = data.luckyData;
+      // Загрузка сохранённых результатов
+      basicData.leftUsers = data.leftUsers || [];
 
-      let prizeIndex = basicData.prizes.length - 1;
-      for (; prizeIndex > -1; prizeIndex--) {
-        if (
-          data.luckyData[prizeIndex] &&
-          data.luckyData[prizeIndex].length >=
-            basicData.prizes[prizeIndex].count
-        ) {
-          continue;
-        }
-        currentPrizeIndex = prizeIndex;
-        currentPrize = basicData.prizes[currentPrizeIndex];
-        break;
-      }
-
-      showPrizeList(currentPrizeIndex);
-      let curLucks = basicData.luckyUsers[currentPrize.type];
-      setPrizeData(currentPrizeIndex, curLucks ? curLucks.length : 0, true);
+      initialisePrizeState(data.luckyData || {});
+      showPrizeList();
+      updateAllPrizeDisplays();
+      currentPrize = null;
+      setQrVisibility(false);
     }
   });
 
@@ -114,14 +639,11 @@ function initAll() {
 }
 
 function initCards() {
-  let member = basicData.users.slice(),
-    showCards = [],
-    length = member.length;
+  cardPrizeLayout = buildCardEntries();
 
   let isBold = false,
     showTable = basicData.leftUsers.length === basicData.users.length,
     index = 0,
-    totalMember = member.length,
     position = {
       x: (140 * COLUMN_COUNT - 20) / 2,
       y: (180 * ROW_COUNT - 20) / 2
@@ -141,7 +663,7 @@ function initCards() {
     for (let j = 0; j < COLUMN_COUNT; j++) {
       isBold = HIGHLIGHT_CELL.includes(j + "-" + i);
       var element = createCard(
-        member[index % length],
+        cardPrizeLayout[index] || {},
         isBold,
         index,
         showTable
@@ -167,17 +689,27 @@ function initCards() {
 
   var vector = new THREE.Vector3();
 
+  const sphereOffset = new THREE.Vector3(
+    SPHERE_OFFSET_X * Resolution,
+    SPHERE_OFFSET_Y * Resolution,
+    0
+  );
+
   for (var i = 0, l = threeDCards.length; i < l; i++) {
     var phi = Math.acos(-1 + (2 * i) / l);
     var theta = Math.sqrt(l * Math.PI) * phi;
     var object = new THREE.Object3D();
-    object.position.setFromSphericalCoords(800 * Resolution, phi, theta);
-    vector.copy(object.position).multiplyScalar(2);
+    var positionVector = new THREE.Vector3();
+    positionVector.setFromSphericalCoords(800 * Resolution, phi, theta);
+    positionVector.add(sphereOffset);
+    object.position.copy(positionVector);
+    vector.copy(positionVector).multiplyScalar(2).sub(sphereOffset);
     object.lookAt(vector);
     targets.sphere.push(object);
   }
 
   renderer = new THREE.CSS3DRenderer();
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.2));
   renderer.setSize(window.innerWidth, window.innerHeight);
   document.getElementById("container").appendChild(renderer.domElement);
 
@@ -188,14 +720,26 @@ function initCards() {
   controls.minDistance = 500;
   controls.maxDistance = 6000;
   controls.addEventListener("change", render);
+  controls.enabled = false;
+  controls.noRotate = true;
+  controls.noPan = true;
+  controls.noZoom = true;
+  controls.update();
 
   bindEvent();
+  ensureGestureControl();
+
+  updateResponsiveLayout(true);
 
   if (showTable) {
     switchScreen("enter");
   } else {
     switchScreen("lottery");
   }
+
+  requestAnimationFrame(() => {
+    setLogoVisible(true);
+  });
 }
 
 function setLotteryStatus(status = false) {
@@ -203,97 +747,100 @@ function setLotteryStatus(status = false) {
 }
 
 /**
- * 事件绑定
+ * Привязка событий
  */
 function bindEvent() {
   document.querySelector("#menu").addEventListener("click", function (e) {
     e.stopPropagation();
-    // 如果正在抽奖，则禁止一切操作
+    // Во время розыгрыша действия запрещены
     if (isLotting) {
       if (e.target.id === "lottery") {
-        rotateObj.stop();
-        btns.lottery.innerHTML = "开始抽奖";
+        requestSmoothStop && requestSmoothStop();
+        btns.lottery.innerHTML = "Начать розыгрыш";
       } else {
-        addQipao("正在抽奖，抽慢一点点～～");
+        addQipao("Идёт розыгрыш, подождите немного…");
       }
       return false;
     }
 
     let target = e.target.id;
     switch (target) {
-      // 显示数字墙
+      // Показать цифровую стену
       case "welcome":
         switchScreen("enter");
         rotate = false;
         break;
-      // 进入抽奖
+      // Перейти к розыгрышу
       case "enter":
         removeHighlight();
-        addQipao(`马上抽取[${currentPrize.title}],不要走开。`);
+        addQipao("Скоро приступим к случайному розыгрышу, оставайтесь с нами.");
         // rotate = !rotate;
         rotate = true;
         switchScreen("lottery");
+        setQrVisibility(false);
         break;
-      // 重置
+      // Сброс
       case "reset":
         let doREset = window.confirm(
-          "是否确认重置数据，重置后，当前已抽的奖项全部清空？"
+          "Вы уверены, что хотите сбросить данные? Все текущие результаты будут очищены?"
         );
         if (!doREset) {
           return;
         }
-        addQipao("重置所有数据，重新抽奖");
+        addQipao("Данные сброшены, начинаем заново");
         addHighlight();
-        resetCard();
-        // 重置所有数据
+        const resetAnimation = resetCard();
+        // Сбросить все данные
         currentLuckys = [];
+        selectedCardIndex = [];
         basicData.leftUsers = Object.assign([], basicData.users);
         basicData.luckyUsers = {};
-        currentPrizeIndex = basicData.prizes.length - 1;
-        currentPrize = basicData.prizes[currentPrizeIndex];
+        basicData.awardedCounts = {};
+        initialisePrizeState({});
+        Promise.resolve(resetAnimation).then(() => {
+          refreshCardLayout();
+        });
+        currentPrize = null;
 
-        resetPrize(currentPrizeIndex);
+        resetPrize();
+        updateAllPrizeDisplays();
         reset();
+        setQrVisibility(false);
         switchScreen("enter");
         break;
-      // 抽奖
+      // Розыгрыш
       case "lottery":
-        setLotteryStatus(true);
-        // 每次抽奖前先保存上一次的抽奖数据
-        saveData();
-        //更新剩余抽奖数目的数据显示
-        changePrize();
-        resetCard().then(res => {
-          // 抽奖
-          lottery();
-        });
-        addQipao(`正在抽取[${currentPrize.title}],调整好姿势`);
+        startLotteryFlow("button");
         break;
-      // 重新抽奖
+      // Переразыграть
       case "reLottery":
         if (currentLuckys.length === 0) {
-          addQipao(`当前还没有抽奖，无法重新抽取喔~~`);
+          addQipao(`Ещё не было розыгрыша, переразыграть нельзя.`);
           return;
         }
-        setErrorData(currentLuckys);
-        addQipao(`重新抽取[${currentPrize.title}],做好准备`);
+        const lastRecord = currentLuckys[0];
+        addQipao("Переразыгрываем приз, приготовьтесь");
         setLotteryStatus(true);
-        // 重新抽奖则直接进行抽取，不对上一次的抽奖数据进行保存
-        // 抽奖
-        resetCard().then(res => {
-          // 抽奖
+        resetCard().then(() => {
+          if (lastRecord) {
+            undoPrizeAward(lastRecord);
+          }
+          currentLuckys = [];
+          selectedCardIndex = [];
+          rotateScene = true;
+          spinStartedAt = Date.now();
           lottery();
         });
         break;
-      // 导出抽奖结果
+      // Экспорт результатов
       case "save":
         saveData().then(res => {
           resetCard().then(res => {
-            // 将之前的记录置空
+            // Очистить предыдущие записи
             currentLuckys = [];
           });
           exportData();
-          addQipao(`数据已保存到EXCEL中。`);
+          addQipao(`Данные сохранены в Excel.`);
         });
         break;
     }
@@ -305,11 +852,15 @@ function bindEvent() {
 function switchScreen(type) {
   switch (type) {
     case "enter":
+      setModeClass("table");
+      setPrizeDisplayMode("compact");
       btns.enter.classList.remove("none");
       btns.lotteryBar.classList.add("none");
       transform(targets.table, 2000);
       break;
     default:
+      setModeClass("lottery");
+      setPrizeDisplayMode("expanded");
       btns.enter.classList.add("none");
       btns.lotteryBar.classList.remove("none");
       transform(targets.sphere, 2000);
@@ -318,7 +869,7 @@ function switchScreen(type) {
 }
 
 /**
- * 创建元素
+ * Создание элемента
  */
 function createElement(css, text) {
   let dom = document.createElement("div");
@@ -328,45 +879,43 @@ function createElement(css, text) {
 }
 
 /**
- * 创建名牌
+ * Создание карточки
  */
-function createCard(user, isBold, id, showTable) {
+function createCard(entry, isBold, id, showTable) {
   var element = createElement();
   element.id = "card-" + id;
 
   if (isBold) {
-    element.className = "element lightitem";
+    element.className = "element card-back lightitem";
     if (showTable) {
       element.classList.add("highlight");
     }
   } else {
-    element.className = "element";
-    element.style.backgroundColor =
-      "rgba(0,127,127," + (Math.random() * 0.7 + 0.25) + ")";
+    element.className = "element card-back";
   }
-  //添加公司标识
-  element.appendChild(createElement("company", COMPANY));
 
-  element.appendChild(createElement("name", user[1]));
+  const label = entry && entry.label ? entry.label : "";
+  setCardLabel(element, label);
 
-  element.appendChild(createElement("details", user[0] + "<br/>" + user[2]));
   return element;
 }
 
 function removeHighlight() {
   document.querySelectorAll(".highlight").forEach(node => {
     node.classList.remove("highlight");
+    setCardSolidState(node, false);
   });
 }
 
 function addHighlight() {
   document.querySelectorAll(".lightitem").forEach(node => {
     node.classList.add("highlight");
+    setCardSolidState(node, true);
   });
 }
 
 /**
- * 渲染地球等
+ * Рендер шара и прочего
  */
 function transform(targets, duration) {
   // TWEEN.removeAll();
@@ -425,103 +974,105 @@ function transform(targets, duration) {
 // }
 
 function rotateBall() {
-  return new Promise((resolve, reject) => {
-    scene.rotation.y = 0;
-    rotateObj = new TWEEN.Tween(scene.rotation);
-    rotateObj
-      .to(
-        {
-          y: Math.PI * 6 * ROTATE_LOOP
-        },
-        ROTATE_TIME * ROTATE_LOOP
-      )
-      .onUpdate(render)
-      // .easing(TWEEN.Easing.Linear)
-      .start()
-      .onStop(() => {
-        scene.rotation.y = 0;
-        resolve();
-      })
-      .onComplete(() => {
-        resolve();
-      });
+  return new Promise(resolve => {
+    // Простое стабильное вращение за счёт рендера
+    rotateScene = true;
+    let stopped = false;
+    spinBaseAngle = scene.rotation.y;
+
+    // Плавная остановка к ближайшему полному обороту
+    requestSmoothStop = () => {
+      if (stopped) return;
+      stopped = true;
+      const twoPi = Math.PI * 2;
+      const currentY = scene.rotation.y;
+      const minDesired = spinBaseAngle + twoPi * MIN_AUTO_SPINS;
+      const targetBase = Math.max(currentY, minDesired);
+      const target = Math.ceil(targetBase / twoPi) * twoPi;
+      rotateScene = false; // перестаём подкручивать сцену в animate()
+      new TWEEN.Tween(scene.rotation)
+        .to({ y: target }, 1000)
+        .easing(TWEEN.Easing.Quadratic.Out)
+        .onUpdate(render)
+        .onComplete(() => {
+          scene.rotation.y = target;
+          resolve();
+        })
+        .start();
+    };
   });
 }
 
 function onWindowResize() {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.2));
   renderer.setSize(window.innerWidth, window.innerHeight);
+  updateResponsiveLayout();
   render();
 }
 
-function animate() {
-  // 让场景通过x轴或者y轴旋转
-  // rotate && (scene.rotation.y += 0.088);
+function animate(now = window.performance ? window.performance.now() : Date.now()) {
+  // Вращение сцены по оси X/Y
+  if (rotateScene) {
+    // fallback rotation to ensure visible motion even if tween is interrupted
+    scene.rotation.y += SPIN_SPEED;
+  }
 
   requestAnimationFrame(animate);
-  TWEEN.update();
-  controls.update();
+  TWEEN.update(now);
 
-  // 渲染循环
-  // render();
+  if (controls && controls.enabled) {
+    controls.update();
+  }
+
+  if (!lastRenderAt || now - lastRenderAt >= 1000 / MAX_RENDER_FPS || rotateScene) {
+    render();
+    lastRenderAt = now;
+  }
 }
 
 function render() {
   renderer.render(scene, camera);
 }
 
-function selectCard(duration = 600) {
+function selectCard(duration = 600, options = {}) {
+  const { silent = false } = options;
   rotate = false;
-  let width = 140,
-    tag = -(currentLuckys.length - 1) / 2,
-    locates = [];
+  const locates = computeWinnerPositions();
 
-  // 计算位置信息, 大于5个分两排显示
-  if (currentLuckys.length > 5) {
-    let yPosition = [-87, 87],
-      l = selectedCardIndex.length,
-      mid = Math.ceil(l / 2);
-    tag = -(mid - 1) / 2;
-    for (let i = 0; i < mid; i++) {
-      locates.push({
-        x: tag * width * Resolution,
-        y: yPosition[0] * Resolution
-      });
-      tag++;
-    }
-
-    tag = -(l - mid - 1) / 2;
-    for (let i = mid; i < l; i++) {
-      locates.push({
-        x: tag * width * Resolution,
-        y: yPosition[1] * Resolution
-      });
-      tag++;
-    }
-  } else {
-    for (let i = selectedCardIndex.length; i > 0; i--) {
-      locates.push({
-        x: tag * width * Resolution,
-        y: 0 * Resolution
-      });
-      tag++;
-    }
+  if (currentLuckys.length === 0) {
+    setLotteryStatus();
+    btns.lottery.innerHTML = "Начать розыгрыш";
+    return;
   }
 
-  let text = currentLuckys.map(item => item[1]);
-  addQipao(
-    `恭喜${text.join("、")}获得${currentPrize.title}, 新的一年必定旺旺旺。`
-  );
+  const labels = currentLuckys.map(item => {
+    if (!item) {
+      return "";
+    }
+    if (item.label) {
+      return item.label;
+    }
+    const info = prizeIndexMap.get(item.type);
+    return (info && info.prize && info.prize.displayLabel) || "";
+  });
+  if (labels.length > 0) {
+    if (!silent) {
+      addQipao(`Приз "${labels[0]}" нашёл своего победителя!`);
+    }
+    setQrVisibility(true);
+  }
 
   selectedCardIndex.forEach((cardIndex, index) => {
-    changeCard(cardIndex, currentLuckys[index]);
+    changeCard(cardIndex, currentLuckys[index], { isWinner: true });
     var object = threeDCards[cardIndex];
+    const targetPosition = locates[index] || { x: 0, y: 0 };
     new TWEEN.Tween(object.position)
       .to(
         {
-          x: locates[index].x,
-          y: locates[index].y * Resolution,
+          x: targetPosition.x,
+          y: targetPosition.y * Resolution,
           z: 2200
         },
         Math.random() * duration + duration
@@ -542,7 +1093,6 @@ function selectCard(duration = 600) {
       .start();
 
     object.element.classList.add("prize");
-    tag++;
   });
 
   new TWEEN.Tween(this)
@@ -550,47 +1100,56 @@ function selectCard(duration = 600) {
     .onUpdate(render)
     .start()
     .onComplete(() => {
-      // 动画结束后可以操作
+      // После окончания анимации можно управлять
       setLotteryStatus();
+      btns.lottery.innerHTML = "Начать розыгрыш";
+      allowImmediateSpin();
     });
 }
 
 /**
- * 重置抽奖牌内容
+ * Сброс содержимого карточек
  */
 function resetCard(duration = 500) {
-  if (currentLuckys.length === 0) {
-    return Promise.resolve();
+  const revertIndices =
+    selectedCardIndex.length > 0
+      ? Array.from(selectedCardIndex)
+      : threeDCards.map((_, idx) => idx);
+
+  if (currentLuckys.length > 0) {
+    selectedCardIndex.forEach(index => {
+      let object = threeDCards[index],
+        target = targets.sphere[index];
+
+      new TWEEN.Tween(object.position)
+        .to(
+          {
+            x: target.position.x,
+            y: target.position.y,
+            z: target.position.z
+          },
+          Math.random() * duration + duration
+        )
+        .easing(TWEEN.Easing.Exponential.InOut)
+        .start();
+
+      new TWEEN.Tween(object.rotation)
+        .to(
+          {
+            x: target.rotation.x,
+            y: target.rotation.y,
+            z: target.rotation.z
+          },
+          Math.random() * duration + duration
+        )
+        .easing(TWEEN.Easing.Exponential.InOut)
+        .start();
+    });
   }
 
-  selectedCardIndex.forEach(index => {
-    let object = threeDCards[index],
-      target = targets.sphere[index];
-
-    new TWEEN.Tween(object.position)
-      .to(
-        {
-          x: target.position.x,
-          y: target.position.y,
-          z: target.position.z
-        },
-        Math.random() * duration + duration
-      )
-      .easing(TWEEN.Easing.Exponential.InOut)
-      .start();
-
-    new TWEEN.Tween(object.rotation)
-      .to(
-        {
-          x: target.rotation.x,
-          y: target.rotation.y,
-          z: target.rotation.z
-        },
-        Math.random() * duration + duration
-      )
-      .easing(TWEEN.Easing.Exponential.InOut)
-      .start();
-  });
+  if (currentLuckys.length === 0) {
+    duration = 0;
+  }
 
   return new Promise((resolve, reject) => {
     new TWEEN.Tween(this)
@@ -598,154 +1157,161 @@ function resetCard(duration = 500) {
       .onUpdate(render)
       .start()
       .onComplete(() => {
-        selectedCardIndex.forEach(index => {
-          let object = threeDCards[index];
-          object.element.classList.remove("prize");
+        revertIndices.forEach(index => {
+          const object = threeDCards[index];
+          object.element.classList.remove("prize", "prize-note", "card-solid", "card-glow", "card-revealed");
+          changeCard(index, cardPrizeLayout[index] || {});
         });
+        selectedCardIndex = [];
+        setQrVisibility(false);
         resolve();
       });
   });
 }
 
 /**
- * 抽奖
+ * Розыгрыш
  */
 function lottery() {
-  // if (isLotting) {
-  //   rotateObj.stop();
-  //   btns.lottery.innerHTML = "开始抽奖";
-  //   return;
-  // }
-  btns.lottery.innerHTML = "结束抽奖";
+  btns.lottery.innerHTML = "Закончить розыгрыш";
   rotateBall().then(() => {
-    // 将之前的记录置空
     currentLuckys = [];
     selectedCardIndex = [];
-    // 当前同时抽取的数目,当前奖品抽完还可以继续抽，但是不记录数据
-    let perCount = EACH_COUNT[currentPrizeIndex],
-      luckyData = basicData.luckyUsers[currentPrize.type],
-      leftCount = basicData.leftUsers.length,
-      leftPrizeCount = currentPrize.count - (luckyData ? luckyData.length : 0);
 
-    if (leftCount < perCount) {
-      addQipao("剩余参与抽奖人员不足，现在重新设置所有人员可以进行二次抽奖！");
-      basicData.leftUsers = basicData.users.slice();
-      leftCount = basicData.leftUsers.length;
+    const prizeRecord = drawPrizeFromPool();
+    if (!prizeRecord) {
+      addQipao("Все призы уже разыграны!");
+      setLotteryStatus(false);
+      btns.lottery.innerHTML = "Начать розыгрыш";
+      setQrVisibility(false);
+      return;
     }
 
-    for (let i = 0; i < perCount; i++) {
-      let luckyId = random(leftCount);
-      currentLuckys.push(basicData.leftUsers.splice(luckyId, 1)[0]);
-      leftCount--;
-      leftPrizeCount--;
+    const prizeInfo = prizeIndexMap.get(prizeRecord.type);
+    currentPrize = prizeInfo ? prizeInfo.prize : null;
 
-      let cardIndex = random(TOTAL_CARDS);
-      while (selectedCardIndex.includes(cardIndex)) {
-        cardIndex = random(TOTAL_CARDS);
-      }
-      selectedCardIndex.push(cardIndex);
+    markPrizeAwarded(prizeRecord, { highlight: true });
 
-      if (leftPrizeCount === 0) {
-        break;
-      }
+    let cardIndex = random(TOTAL_CARDS);
+    while (selectedCardIndex.includes(cardIndex)) {
+      cardIndex = random(TOTAL_CARDS);
     }
+    selectedCardIndex.push(cardIndex);
 
-    // console.log(currentLuckys);
+    currentLuckys = [
+      Object.assign({}, prizeRecord, {
+        cardIndex
+      })
+    ];
+
     selectCard();
   });
 }
 
 /**
- * 保存上一次的抽奖结果
+ * Сохранить предыдущий результат
  */
 function saveData() {
-  if (!currentPrize) {
-    //若奖品抽完，则不再记录数据，但是还是可以进行抽奖
-    return;
+  if (!currentLuckys.length) {
+    return Promise.resolve();
   }
 
-  let type = currentPrize.type,
-    curLucky = basicData.luckyUsers[type] || [];
-
-  curLucky = curLucky.concat(currentLuckys);
-
-  basicData.luckyUsers[type] = curLucky;
-
-  if (currentPrize.count <= curLucky.length) {
-    currentPrizeIndex--;
-    if (currentPrizeIndex <= -1) {
-      currentPrizeIndex = 0;
-    }
-    currentPrize = basicData.prizes[currentPrizeIndex];
+  const record = currentLuckys[0];
+  if (!record || typeof record.type === "undefined") {
+    return Promise.resolve();
   }
 
-  if (currentLuckys.length > 0) {
-    // todo by xc 添加数据保存机制，以免服务器挂掉数据丢失
-    return setData(type, currentLuckys);
-  }
-  return Promise.resolve();
-}
+  const type = record.type;
+  const key = String(type);
+  const curLucky = basicData.luckyUsers[key] || [];
+  basicData.luckyUsers[key] = curLucky.concat(record);
 
-function changePrize() {
-  let luckys = basicData.luckyUsers[currentPrize.type];
-  let luckyCount = (luckys ? luckys.length : 0) + EACH_COUNT[currentPrizeIndex];
-  // 修改左侧prize的数目和百分比
-  setPrizeData(currentPrizeIndex, luckyCount);
+  return setData(type, [record]);
 }
 
 /**
- * 随机抽奖
+ * Случайный выбор
  */
 function random(num) {
-  // Math.floor取到0-num-1之间数字的概率是相等的
+  // Равномерное распределение чисел 0..num-1
   return Math.floor(Math.random() * num);
 }
 
 /**
- * 切换名牌人员信息
+ * Смена данных на карточке
  */
-function changeCard(cardIndex, user) {
-  let card = threeDCards[cardIndex].element;
+function changeCard(cardIndex, entry = {}, options = {}) {
+  const cardObj = threeDCards[cardIndex];
+  if (!cardObj || !cardObj.element) {
+    return;
+  }
+  const element = cardObj.element;
+  const label = entry && entry.label ? entry.label : "";
 
-  card.innerHTML = `<div class="company">${COMPANY}</div><div class="name">${
-    user[1]
-  }</div><div class="details">${user[0] || ""}<br/>${user[2] || "PSST"}</div>`;
+  element.classList.remove("card-glow");
+  setCardLabel(element, label);
+
+  const isWinner = !!options.isWinner;
+  element.classList.toggle("prize-note", isWinner);
+  if (isWinner) {
+    element.classList.remove("card-back");
+    element.classList.add("card-revealed", "prize");
+    setCardSolidState(element, true);
+  } else {
+    element.classList.remove("card-revealed", "prize", "prize-note");
+    element.classList.add("card-back");
+    setCardSolidState(element, false);
+  }
 }
 
 /**
- * 切换名牌背景
+ * Смена фона карточки
  */
 function shine(cardIndex, color) {
   let card = threeDCards[cardIndex].element;
-  card.style.backgroundColor =
-    color || "rgba(0,127,127," + (Math.random() * 0.7 + 0.25) + ")";
+  if (!card) return;
+  card.classList.add("card-glow");
+  setTimeout(() => {
+    card.classList.remove("card-glow");
+  }, 1200);
 }
 
 /**
- * 随机切换背景和人员信息
+ * Случайная смена фона и данных
  */
 function shineCard() {
-  let maxCard = 10,
-    maxUser;
-  let shineCard = 10 + random(maxCard);
+  if (shineTimer) {
+    window.clearTimeout(shineTimer);
+    shineTimer = null;
+  }
 
-  setInterval(() => {
-    // 正在抽奖停止闪烁
-    if (isLotting) {
-      return;
-    }
-    maxUser = basicData.leftUsers.length;
-    for (let i = 0; i < shineCard; i++) {
-      let index = random(maxUser),
-        cardIndex = random(TOTAL_CARDS);
-      // 当前显示的已抽中名单不进行随机切换
-      if (selectedCardIndex.includes(cardIndex)) {
-        continue;
+  const schedule = () => {
+    if (!isLotting && TOTAL_CARDS > 0) {
+      const pulses = Math.max(1, Math.min(4, Math.round(TOTAL_CARDS * 0.012)));
+      let applied = 0;
+
+      const maxAttempts = Math.max(TOTAL_CARDS, pulses * 3);
+      let attempts = 0;
+
+      while (applied < pulses && attempts < maxAttempts) {
+        const cardIndex = random(TOTAL_CARDS);
+        attempts++;
+        if (selectedCardIndex.includes(cardIndex)) {
+          continue;
+        }
+        const cardRef = threeDCards[cardIndex];
+        if (!cardRef || !cardRef.element || cardRef.element.classList.contains("card-revealed")) {
+          continue;
+        }
+        shine(cardIndex);
+        applied++;
       }
-      shine(cardIndex);
-      changeCard(cardIndex, basicData.leftUsers[index]);
     }
-  }, 500);
+
+    shineTimer = window.setTimeout(schedule, 1400);
+  };
+
+  schedule();
 }
 
 function setData(type, data) {
@@ -798,13 +1364,13 @@ function reset() {
   window.AJAX({
     url: "/reset",
     success(data) {
-      console.log("重置成功");
+      console.log("Сброс выполнен");
     }
   });
 }
 
 function createHighlight() {
-  let year = new Date().getFullYear() + "";
+  let year = String(DISPLAY_YEAR);
   let step = 4,
     xoffset = 1,
     yoffset = 1,
@@ -855,7 +1421,7 @@ window.onload = function () {
             animate();
           },
           () => {
-            addQipao("背景音乐自动播放失败，请手动播放！");
+            addQipao("Не удалось автоматически запустить музыку. Запустите вручную!");
           }
         );
       } else {

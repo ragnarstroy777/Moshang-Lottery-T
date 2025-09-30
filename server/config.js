@@ -1,78 +1,86 @@
 /**
- * 奖品设置
- * type: 唯一标识，0是默认特别奖的占位符，其它奖品不可使用
- * count: 奖品数量
- * title: 奖品描述
- * text: 奖品标题
- * img: 图片地址
+ * Настройка призов
+ * type: уникальный идентификатор; 0 — плейсхолдер для специального приза
+ * count: количество призов
+ * title: описание приза
+ * text: название приза
+ * img: путь к изображению
+ * displayTotal: число для отображения во фракции (правый знаменатель)
  */
 const prizes = [
   {
     type: 0,
     count: 1000,
     title: "",
-    text: "特别奖"
+    text: "Специальный приз"
   },
   {
     type: 1,
     count: 2,
-    text: "特等奖",
-    title: "神秘大礼",
-    img: "../img/secrit.jpg"
+    text: "1000 красивых номеров",
+    title: "",
+    img: "../img/secrit.jpg",
+    displayTotal: 1000
   },
   {
     type: 2,
     count: 5,
-    text: "一等奖",
-    title: "Mac Pro",
-    img: "../img/mbp.jpg"
+    text: "100 000 000 дополнительных гигабайтов",
+    title: "",
+    img: "../img/mbp.jpg",
+    displayTotal: 100000000
   },
   {
     type: 3,
     count: 6,
-    text: "二等奖",
-    title: "华为 Mate30",
-    img: "../img/huawei.png"
+    text: "100 000 000 дополнительных минут",
+    title: "",
+    img: "../img/huawei.png",
+    displayTotal: 100000000
   },
   {
     type: 4,
     count: 7,
-    text: "三等奖",
-    title: "Ipad Mini5",
-    img: "../img/ipad.jpg"
+    text: "50 000 000 мегабайт в роуминге",
+    title: "",
+    img: "../img/ipad.jpg",
+    displayTotal: 50000000
   },
   {
     type: 5,
     count: 8,
-    text: "四等奖",
-    title: "大疆无人机",
-    img: "../img/spark.jpg"
+    text: "1000 уникальных аватаров с фирменным стилем T-Mobile",
+    title: "",
+    img: "../img/spark.jpg",
+    displayTotal: 1000
   },
   {
     type: 6,
     count: 8,
-    text: "五等奖",
-    title: "Kindle",
-    img: "../img/kindle.jpg"
+    text: "Эксклюзивный номер, который совпадает с датой твоего дня рождения",
+    title: "",
+    img: "../img/kindle.jpg",
+    displayTotal: 100000
   },
   {
     type: 7,
     count: 11,
-    text: "六等奖",
-    title: "漫步者蓝牙耳机",
-    img: "../img/edifier.jpg"
+    text: "Фирменные T-Mobile облики для аватара в метавселенной",
+    title: "",
+    img: "../img/edifier.jpg",
+    displayTotal: 100000
   }
 ];
 
 /**
- * 一次抽取的奖品个数与prizes对应
+ * Количество призов за один розыгрыш (по порядку из prizes)
  */
 const EACH_COUNT = [1, 1, 5, 6, 7, 8, 9, 10];
 
 /**
- * 卡片公司名称标识
+ * Название компании на карточке
  */
-const COMPANY = "MoShang";
+const COMPANY = "TiMobile";
 
 module.exports = {
   prizes,

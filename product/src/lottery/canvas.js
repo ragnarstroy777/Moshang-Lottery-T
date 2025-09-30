@@ -6,7 +6,7 @@
   var canvas = document.getElementById("canvas");
 
   ~~(function setSize() {
-    //定义canvas的宽高，让他跟浏览器的窗口的宽高相同
+    // Задаём размеры canvas как у окна браузера
     window.onresize = arguments.callee;
     w = window.innerWidth;
     h = window.innerHeight;
@@ -46,7 +46,9 @@
         x: Math.random() * canvas.width,
         y: Math.random() * canvas.height,
         z: Math.random() * canvas.width,
-        o: "0." + Math.floor(Math.random() * 99) + 1
+        o: "0." + Math.floor(Math.random() * 99) + 1,
+        a: Math.random() * Math.PI * 2, // angle for rotation
+        w: 0.01 + Math.random() * 0.03 // angular velocity
       };
       stars.push(star);
     }
@@ -56,9 +58,13 @@
     for (i = 0; i < numStars; i++) {
       star = stars[i];
       star.z--;
+      star.a += star.w; // rotate while flying
 
       if (star.z <= 0) {
         star.z = canvas.width;
+        star.x = Math.random() * canvas.width;
+        star.y = Math.random() * canvas.height;
+        star.a = Math.random() * Math.PI * 2;
       }
     }
   }
@@ -76,10 +82,11 @@
       initializeStars();
     }
     if (warp == 0) {
-      c.fillStyle = "rgba(0,10,20,1)";
+      // white background to keep UI bright
+      c.fillStyle = "#ffffff";
       c.fillRect(0, 0, canvas.width, canvas.height);
     }
-    c.fillStyle = "rgba(209, 255, 255, " + radius + ")";
+    // draw stars as dark-blue rotating diamonds on white background
     for (i = 0; i < numStars; i++) {
       star = stars[i];
 
@@ -88,10 +95,15 @@
       pixelY = (star.y - centerY) * (focalLength / star.z);
       pixelY += centerY;
       pixelRadius = 1 * (focalLength / star.z);
+      // make them ~50% larger and diamond shaped
+      var size = pixelRadius * 1.5;
 
-      c.fillRect(pixelX, pixelY, pixelRadius, pixelRadius);
-      c.fillStyle = "rgba(209, 255, 255, " + star.o + ")";
-      //c.fill();
+      c.save();
+      c.translate(pixelX, pixelY);
+      c.rotate(star.a + Math.PI / 4);
+      c.fillStyle = "rgba(10, 42, 107, " + star.o + ")"; // dark blue
+      c.fillRect(-size / 2, -size / 2, size, size);
+      c.restore();
     }
   }
 

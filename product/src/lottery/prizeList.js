@@ -5,23 +5,31 @@ let defaultType = 0;
 
 let prizes;
 const DEFAULT_MESS = [
-  "我是该抽中一等奖还是一等奖呢，纠结ing...",
-  "听说要提前一个月吃素才能中大奖喔！",
-  "好想要一等奖啊！！！",
-  "一等奖有没有人想要呢？",
-  "五等奖也不错，只要自己能中奖就行",
-  "祝大家新年快乐！",
-  "中不中奖不重要，大家吃好喝好。",
-  "新年，祝福大家事事顺遂。",
-  "作为专业陪跑的我，我就看看你们有谁跟我一样",
-  "新的一年祝福大家越来越好！",
-  "来年再战！！！"
+  "Выиграть бы мне первый приз или первый приз? Вот дилемма...",
+  "Говорят, месяц вегетарианства — и сорвёшь джекпот!",
+  "Очень хочу первый приз!!!",
+  "Кому-нибудь нужен первый приз?",
+  "И пятая награда тоже неплоха — лишь бы повезло",
+  "С Новым годом всем!",
+  "Главное — не выигрыш, а хорошо поесть и повеселиться.",
+  "В новом году пусть всё ладится!",
+  "Я профессиональный сопровождающий — посмотрим, кто со мной за компанию",
+  "Пусть в новом году всё становится лучше и лучше!",
+  "В следующем году — реванш!!!"
 ];
 
 let lastDanMuList = [];
 
 let prizeElement = {},
-  lasetPrizeIndex = 0;
+  lasetPrizeIndex = null;
+// Извлекаем числовой показатель из названия приза (например, "100 000 000 ..." -> 100000000)
+function parseNumberFromText(text) {
+  if (!text || typeof text !== "string") return null;
+  const m = text.match(/(\d[\d\s]*)/);
+  if (!m) return null;
+  const num = parseInt(m[1].replace(/\s+/g, ""), 10);
+  return isNaN(num) ? null : num;
+}
 class DanMu {
   constructor(option) {
     if (typeof option !== "object") {
@@ -150,22 +158,32 @@ let addQipao = (() => {
 function setPrizes(pri) {
   prizes = pri;
   defaultType = prizes[0]["type"];
-  lasetPrizeIndex = pri.length - 1;
+  lasetPrizeIndex = null;
 }
 
 function showPrizeList(currentPrizeIndex) {
-  let currentPrize = prizes[currentPrizeIndex];
-  if (currentPrize.type === defaultType) {
-    currentPrize.count === "不限制";
+  let currentPrize = null;
+  const hasIndex =
+    typeof currentPrizeIndex === "number" && currentPrizeIndex >= 0;
+  if (hasIndex) {
+    currentPrize = prizes[currentPrizeIndex];
+    if (currentPrize && currentPrize.type === defaultType) {
+      currentPrize = null;
+    }
   }
-  let htmlCode = `<div class="prize-mess">正在抽取<label id="prizeType" class="prize-shine">${currentPrize.text}</label><label id="prizeText" class="prize-shine">${currentPrize.title}</label>，剩余<label id="prizeLeft" class="prize-shine">${currentPrize.count}</label>个</div><ul class="prize-list">`;
+
+  let htmlCode = `<ul class="prize-list">`;
+  let order = 1;
   prizes.forEach(item => {
     if (item.type === defaultType) {
-      return true;
+      return;
     }
+    const displayTotal = (typeof item.displayTotal === 'number' && isFinite(item.displayTotal) && item.displayTotal > 0)
+      ? item.displayTotal
+      : (parseNumberFromText(item.text) || item.count);
     htmlCode += `<li id="prize-item-${item.type}" class="prize-item ${
-      item.type == currentPrize.type ? "shine" : ""
-    }">
+      currentPrize && item.type == currentPrize.type ? "shine" : ""
+    }" data-order="${order}">
                         <span></span><span></span><span></span><span></span>
                         <div class="prize-img">
                             <img src="${item.img}" alt="${item.title}">
@@ -184,11 +202,12 @@ function showPrizeList(currentPrizeIndex) {
                                 <div id="prize-count-${
                                   item.type
                                 }" class="prize-count-left">
-                                    ${item.count + "/" + item.count}
+                                    ${item.count + "/" + displayTotal}
                                 </div>
                             </div>
                         </div>
                     </li>`;
+    order++;
   });
   htmlCode += `</ul>`;
 
@@ -197,16 +216,43 @@ function showPrizeList(currentPrizeIndex) {
 
 function resetPrize(currentPrizeIndex) {
   prizeElement = {};
-  lasetPrizeIndex = currentPrizeIndex;
-  showPrizeList(currentPrizeIndex);
+  lasetPrizeIndex =
+    typeof currentPrizeIndex === "number" && currentPrizeIndex >= 0
+      ? currentPrizeIndex
+      : null;
+  showPrizeList(lasetPrizeIndex);
 }
 
 let setPrizeData = (function () {
-  return function (currentPrizeIndex, count, isInit) {
-    let currentPrize = prizes[currentPrizeIndex],
-      type = currentPrize.type,
-      elements = prizeElement[type],
-      totalCount = currentPrize.count;
+  function clearShine(except) {
+    if (except === undefined || except === null) {
+      lasetPrizeIndex = null;
+    }
+    Object.keys(prizeElement).forEach(key => {
+      const el = prizeElement[key];
+      if (el && el.box && key !== except) {
+        el.box.classList.remove("shine");
+      }
+    });
+  }
+
+  return function (currentPrizeIndex, count, options) {
+    if (
+      typeof currentPrizeIndex !== "number" ||
+      currentPrizeIndex < 0 ||
+      currentPrizeIndex >= prizes.length
+    ) {
+      return;
+    }
+
+    const currentPrize = prizes[currentPrizeIndex];
+    if (!currentPrize || currentPrize.type === defaultType) {
+      return;
+    }
+
+    const type = currentPrize.type;
+    let elements = prizeElement[type];
+    const totalCount = Number(currentPrize.count) || 0;
 
     if (!elements) {
       elements = {
@@ -217,48 +263,43 @@ let setPrizeData = (function () {
       prizeElement[type] = elements;
     }
 
-    if (!prizeElement.prizeType) {
-      prizeElement.prizeType = document.querySelector("#prizeType");
-      prizeElement.prizeLeft = document.querySelector("#prizeLeft");
-      prizeElement.prizeText = document.querySelector("#prizeText");
+    const opts =
+      typeof options === "boolean" ? { fromInit: options } : options || {};
+
+    if (opts.highlight) {
+      clearShine(String(type));
+      elements.box && elements.box.classList.add("shine");
+      lasetPrizeIndex = currentPrizeIndex;
+    } else if (opts.clearHighlight) {
+      if (lasetPrizeIndex === currentPrizeIndex) {
+        lasetPrizeIndex = null;
+      }
+      elements.box && elements.box.classList.remove("shine");
     }
 
-    if (isInit) {
-      for (let i = prizes.length - 1; i > currentPrizeIndex; i--) {
-        let type = prizes[i]["type"];
-        document.querySelector(`#prize-item-${type}`).className =
-          "prize-item done";
-        document.querySelector(`#prize-bar-${type}`).style.width = "0";
-        document.querySelector(`#prize-count-${type}`).textContent =
-          "0" + "/" + prizes[i]["count"];
+    if (elements.box) {
+      if (totalCount > 0 && count >= totalCount) {
+        elements.box.classList.add("done");
+        elements.box.classList.remove("shine");
+        if (lasetPrizeIndex === currentPrizeIndex) {
+          lasetPrizeIndex = null;
+        }
+      } else {
+        elements.box.classList.remove("done");
       }
     }
 
-    if (lasetPrizeIndex !== currentPrizeIndex) {
-      let lastPrize = prizes[lasetPrizeIndex],
-        lastBox = document.querySelector(`#prize-item-${lastPrize.type}`);
-      lastBox.classList.remove("shine");
-      lastBox.classList.add("done");
-      elements.box && elements.box.classList.add("shine");
-      prizeElement.prizeType.textContent = currentPrize.text;
-      prizeElement.prizeText.textContent = currentPrize.title;
-
-      lasetPrizeIndex = currentPrizeIndex;
+    const awarded = Math.min(Math.max(Number(count) || 0, 0), totalCount);
+    const percent = totalCount === 0 ? 1 : awarded / totalCount;
+    if (elements.bar) {
+      elements.bar.style.width = percent * 100 + "%";
     }
-
-    if (currentPrizeIndex === 0) {
-      prizeElement.prizeType.textContent = "特别奖";
-      prizeElement.prizeText.textContent = " ";
-      prizeElement.prizeLeft.textContent = "不限制";
-      return;
+    const displayTotal = (typeof currentPrize.displayTotal === 'number' && isFinite(currentPrize.displayTotal) && currentPrize.displayTotal > 0)
+      ? currentPrize.displayTotal
+      : (parseNumberFromText(currentPrize.text) || totalCount);
+    if (elements.text) {
+      elements.text.textContent = `${awarded}/${displayTotal}`;
     }
-
-    count = totalCount - count;
-    count = count < 0 ? 0 : count;
-    let percent = (count / totalCount).toFixed(2);
-    elements.bar && (elements.bar.style.width = percent * 100 + "%");
-    elements.text && (elements.text.textContent = count + "/" + totalCount);
-    prizeElement.prizeLeft.textContent = count;
   };
 })();
 

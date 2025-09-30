@@ -25,7 +25,7 @@ let app = express(),
   defaultType = cfg.prizes[0]["type"],
   defaultPage = `default data`;
 
-//这里指定参数使用 json 格式
+// Используем формат JSON для параметров
 app.use(
   bodyParser.json({
     limit: "1mb"
@@ -44,12 +44,12 @@ if (process.argv.length > 2) {
 
 app.use(express.static(cwd));
 
-//请求地址为空，默认重定向到index.html文件
+// Пустой путь: перенаправление на index.html
 app.get("/", (req, res) => {
   res.redirect(301, "index.html");
 });
 
-//设置跨域访问
+// Разрешаем CORS
 app.all("*", function(req, res, next) {
   res.header("Access-Control-Allow-Origin", "*");
   res.header("Access-Control-Allow-Headers", "X-Requested-With");
@@ -60,11 +60,11 @@ app.all("*", function(req, res, next) {
 });
 
 app.post("*", (req, res, next) => {
-  log(`请求内容：${JSON.stringify(req.path, 2)}`);
+  log(`Запрос: ${JSON.stringify(req.path, 2)}`);
   next();
 });
 
-// 获取之前设置的数据
+// Получить ранее сохранённые данные
 router.post("/getTempData", (req, res, next) => {
   getLeftUsers();
   res.json({
@@ -74,11 +74,11 @@ router.post("/getTempData", (req, res, next) => {
   });
 });
 
-// 获取所有用户
+// Сбросить данные
 router.post("/reset", (req, res, next) => {
   luckyData = {};
   errorData = [];
-  log(`重置数据成功`);
+  log(`Сброс данных выполнен`);
   saveErrorDataFile(errorData);
   return saveDataFile(luckyData).then(data => {
     res.json({
@@ -87,83 +87,97 @@ router.post("/reset", (req, res, next) => {
   });
 });
 
-// 获取所有用户
+// Получить всех пользователей
 router.post("/getUsers", (req, res, next) => {
   res.json(curData.users);
-  log(`成功返回抽奖用户数据`);
+  log(`Отправлены данные пользователей для розыгрыша`);
 });
 
-// 获取奖品信息
+// Получить информацию о призах
 router.post("/getPrizes", (req, res, next) => {
   // res.json(curData.prize);
-  log(`成功返回奖品数据`);
+  log(`Отправлены данные о призах`);
 });
 
-// 保存抽奖数据
+// Сохранить данные розыгрыша
 router.post("/saveData", (req, res, next) => {
   let data = req.body;
   setLucky(data.type, data.data)
     .then(t => {
       res.json({
-        type: "设置成功！"
+        type: "success"
       });
-      log(`保存奖品数据成功`);
+      log(`Данные о призах сохранены`);
     })
     .catch(data => {
       res.json({
-        type: "设置失败！"
+        type: "error"
       });
-      log(`保存奖品数据失败`);
+      log(`Не удалось сохранить данные о призах`);
     });
 });
 
-// 保存抽奖数据
+// Сохранить данные об отсутствующих участниках
 router.post("/errorData", (req, res, next) => {
   let data = req.body;
   setErrorData(data.data)
     .then(t => {
       res.json({
-        type: "设置成功！"
+        type: "success"
       });
-      log(`保存没来人员数据成功`);
+      log(`Список отсутствующих участников сохранён`);
     })
     .catch(data => {
       res.json({
-        type: "设置失败！"
+        type: "error"
       });
-      log(`保存没来人员数据失败`);
+      log(`Не удалось сохранить список отсутствующих участников`);
     });
 });
 
-// 保存数据到excel中去
+// Экспорт данных в Excel
 router.post("/export", (req, res, next) => {
-  let type = [1, 2, 3, 4, 5, defaultType],
-    outData = [["工号", "姓名", "部门"]];
+  let outData = [["Приз", "Описание", "Дата"]];
   cfg.prizes.forEach(item => {
-    outData.push([item.text]);
-    outData = outData.concat(luckyData[item.type] || []);
+    const prizeName = item.text || "";
+    outData.push([prizeName, "", ""]);
+    const records = luckyData[item.type] || [];
+    records.forEach(record => {
+      if (Array.isArray(record)) {
+        const [, name, extra] = record;
+        outData.push([prizeName, name || record[0] || "", extra || ""]);
+      } else if (record && typeof record === "object") {
+        const label = record.label || "";
+        const ts = record.timestamp
+          ? new Date(record.timestamp).toLocaleString()
+          : "";
+        outData.push([prizeName, label, ts]);
+      } else {
+        outData.push([prizeName, String(record || ""), ""]);
+      }
+    });
   });
 
-  writeXML(outData, "/抽奖结果.xlsx")
+  writeXML(outData, "/results.xlsx")
     .then(dt => {
-      // res.download('/抽奖结果.xlsx');
+      // res.download('/results.xlsx');
       res.status(200).json({
         type: "success",
-        url: "抽奖结果.xlsx"
+        url: "results.xlsx"
       });
-      log(`导出数据成功！`);
+      log(`Экспорт данных выполнен успешно`);
     })
     .catch(err => {
       res.json({
         type: "error",
         error: err.error
       });
-      log(`导出数据失败！`);
+      log(`Ошибка экспорта данных`);
     });
 });
 
-//对于匹配不到的路径或者请求，返回默认页面
-//区分不同的请求返回不同的页面内容
+// Для непопадающих под маршруты запросов возвращаем дефолтную страницу
+// Разные ответы для GET/POST
 router.all("*", (req, res) => {
   if (req.method.toLowerCase() === "get") {
     if (/\.(html|htm)/.test(req.originalUrl)) {
@@ -204,15 +218,15 @@ function setErrorData(data) {
 app.use(router);
 
 function loadData() {
-  console.log("加载EXCEL数据文件");
+  console.log("Загрузка файла данных Excel");
   let cfgData = {};
 
   // curData.users = loadXML(path.join(cwd, "data/users.xlsx"));
   curData.users = loadXML(path.join(dataBath, "data/users.xlsx"));
-  // 重新洗牌
+  // Перетасовать список
   shuffle(curData.users);
 
-  // 读取已经抽取的结果
+  // Загрузить ранее разыгранные результаты
   loadTempData()
     .then(data => {
       luckyData = data[0];
@@ -224,17 +238,21 @@ function loadData() {
 }
 
 function getLeftUsers() {
-  //  记录当前已抽取的用户
+  // Отметить уже разыгранных пользователей
   let lotteredUser = {};
   for (let key in luckyData) {
     let luckys = luckyData[key];
     luckys.forEach(item => {
-      lotteredUser[item[0]] = true;
+      if (Array.isArray(item)) {
+        lotteredUser[item[0]] = true;
+      }
     });
   }
-  // 记录当前已抽取但是不在线人员
+  // Отметить отсутствующих пользователей
   errorData.forEach(item => {
-    lotteredUser[item[0]] = true;
+    if (Array.isArray(item)) {
+      lotteredUser[item[0]] = true;
+    }
   });
 
   let leftUsers = Object.assign([], curData.users);

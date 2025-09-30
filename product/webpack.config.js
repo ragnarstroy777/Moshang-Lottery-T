@@ -36,18 +36,18 @@ module.exports = {
     ]
   },
   plugins: [
-    new webpack.BannerPlugin("版权所有，翻版必究"),
+    new webpack.BannerPlugin("Все права защищены"),
     new HtmlWebpackPlugin({
       template: path.join(__dirname, "/src/index.html"),
       filename: "./index.html",
       minify: {
-        // 移除空属性
+        // Удаление пустых атрибутов
         removeEmptyAttributes: true,
-        // 压缩css
+        // Минификация CSS
         minifyCSS: true,
-        // 压缩JS
+        // Минификация JS
         minifyJS: true,
-        // 移除空格
+        // Удаление лишних пробелов
         collapseWhitespace: true
       },
       hash: true,

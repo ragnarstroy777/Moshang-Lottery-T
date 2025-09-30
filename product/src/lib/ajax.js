@@ -23,7 +23,7 @@ window.AJAX = function (opt) {
                 opt.isJson && (res = JSON.parse(res));
                 opt.success && opt.success(res);
             } else {
-                console.log('There was a problem with the request.');
+                console.log('Произошла ошибка при выполнении запроса.');
             }
         }
         // } catch (e) {

@@ -1,10 +1,10 @@
 const fs = require("fs");
 
-// 测试抽奖结果数据的正确性
+// Проверка корректности результатов розыгрыша
 var selected = {},
   repeat = [],
-  luckyData = require("/Users/xiechang/Documents/project/抽奖/product/dist/temp.json"),
-  errorData = require("/Users/xiechang/Documents/project/抽奖/product/dist/error.json");
+  luckyData = JSON.parse(require('fs').readFileSync(require('path').join(__dirname, "../product/dist/temp.json"), 'utf8')),
+  errorData = JSON.parse(require('fs').readFileSync(require('path').join(__dirname, "../product/dist/error.json"), 'utf8'));
 
 for (let key in luckyData) {
   let item = luckyData[key];
@@ -31,4 +31,4 @@ if (repeat.length > 0) {
   console.log(repeat);
   return;
 }
-console.log("没有重复选项");
+console.log("Дубликаты отсутствуют");

@@ -8,7 +8,7 @@ if (!fs.existsSync(cwd)) {
 }
 
 /**
- * 读取缓存的数据内容
+ * Чтение кешированных данных
  */
 function loadTempData() {
   let pros = [];
@@ -40,7 +40,7 @@ function loadTempData() {
 }
 
 /**
- * 读取XML文件数据
+ * Чтение данных из Excel (XLSX)
  */
 function loadXML(xmlPath) {
   let userData = xlsx.parse(xmlPath);
@@ -55,14 +55,14 @@ function loadXML(xmlPath) {
 }
 
 /**
- * 写入excel
+ * Запись Excel
  * @param {Array} data
  * @param {string} name
  */
 function writeXML(data, name) {
   let buffer = xlsx.build([
     {
-      name: "抽奖结果",
+      name: "Results",
       data: data
     }
   ]);
@@ -79,7 +79,7 @@ function writeXML(data, name) {
 }
 
 /**
- * 写入文件
+ * Запись файла
  * @param {*} data
  */
 function saveDataFile(data) {
@@ -96,13 +96,13 @@ function saveDataFile(data) {
         return;
       }
       resolve();
-      console.log("数据写入成功");
+      console.log("Данные успешно записаны");
     });
   });
 }
 
 /**
- * 错误日志文件输出
+ * Запись файла ошибок
  * @param {*} data
  */
 function saveErrorDataFile(data) {
@@ -118,13 +118,13 @@ function saveErrorDataFile(data) {
         return;
       }
       resolve();
-      console.log("数据写入成功");
+      console.log("Данные успешно записаны");
     });
   });
 }
 
 /**
- * 洗牌算法
+ * Алгоритм перетасовки
  * @param {*} arr
  */
 function shuffle(arr) {

@@ -393,7 +393,7 @@ THREE.TrackballControls = function(object, domElement) {
 
         }
 
-        // 阻止浏览器的默认行为
+        // Отменить поведение браузера по умолчанию
         return;
 
         if (_state === STATE.ROTATE && !_this.noRotate) {
